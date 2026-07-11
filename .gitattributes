@@ -1,5 +1,4 @@
 *.sh text eol=lf
-*.ps1 text eol=crlf
 *.md text eol=lf
 LICENSE text eol=lf
 .gitignore text eol=lf
