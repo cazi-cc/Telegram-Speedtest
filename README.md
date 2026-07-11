@@ -6,6 +6,14 @@
 
 ## 一键运行
 
+Windows PowerShell：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'telegram-speedtest.ps1'; iwr -UseBasicParsing 'https://raw.githubusercontent.com/cazi-cc/Telegram-Speedtest/main/telegram-speedtest.ps1' -OutFile $p; & $p"
+```
+
+Linux / macOS / BSD：
+
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/cazi-cc/Telegram-Speedtest/main/telegram-speedtest.sh)
 ```
@@ -24,6 +32,7 @@ tst
 - 自动安装并调用 `iyear/tdl`。
 - 支持二维码登录和手机号验证码登录。
 - 支持 VPS 直连、SOCKS5、HTTP 代理。
+- 支持 Windows PowerShell 和 Bash 两种入口。
 - 使用具体 Telegram 频道/群组资源消息链接测速。
 - 分别测试单连接敏感性和多连接总吞吐。
 - 默认每轮只限时下载，不完整保存大文件。
@@ -34,7 +43,11 @@ tst
 
 ## 支持环境
 
-脚本主要面向 Linux VPS，也尽量兼容常见类 Unix 环境。
+脚本支持 Windows PowerShell 和 Bash 两种入口。
+
+Windows 侧使用 `telegram-speedtest.ps1`，首次运行会安装 `tst.cmd` 联网快捷命令。
+
+Bash 侧主要面向 Linux VPS，也尽量兼容常见类 Unix 环境。
 
 已内置的软件包管理器探测包括：
 
@@ -42,7 +55,7 @@ tst
 apt-get / dnf / yum / zypper / pacman / apk / pkg / brew
 ```
 
-只要系统能运行 Bash、curl 和 `tdl` 官方安装脚本，通常都可以使用。Debian、Ubuntu、Fedora、CentOS/RHEL、AlmaLinux/Rocky、Arch、Alpine、openSUSE、FreeBSD、macOS 等环境可优先尝试。
+只要系统能运行 PowerShell 或 Bash、curl/Invoke-WebRequest 和 `tdl` 官方安装脚本，通常都可以使用。Windows、Debian、Ubuntu、Fedora、CentOS/RHEL、AlmaLinux/Rocky、Arch、Alpine、openSUSE、FreeBSD、macOS 等环境可优先尝试。
 
 ## 第一次使用
 
@@ -141,8 +154,9 @@ https://t.me/c/1234567890/123
 默认会保留：
 
 - `tst` 联网快捷命令。
-- 少量配置：`~/.config/telegram-speedtest/`
-- Telegram 登录数据：`~/.tdl/telegram-speedtest/`
+- Bash 少量配置：`~/.config/telegram-speedtest/`
+- Bash Telegram 登录数据：`~/.tdl/telegram-speedtest/`
+- Windows 配置和登录数据：`%APPDATA%\Telegram-Speedtest\`
 - 上一次测试链接。
 
 保留登录数据是为了避免每次重新扫码。保留测试链接是为了下次启动后可以直接复用。需要彻底清理登录数据时，在菜单中选择：
