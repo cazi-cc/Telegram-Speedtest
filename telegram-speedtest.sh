@@ -2,7 +2,7 @@
 set -u
 
 APP_NAME="telegram-speedtest"
-APP_VERSION="0.4.0"
+APP_VERSION="0.5.0"
 REPO_URL="https://github.com/cazi-cc/Telegram-Speedtest"
 RAW_URL="https://raw.githubusercontent.com/cazi-cc/Telegram-Speedtest/main/telegram-speedtest.sh"
 TDL_INSTALL_URL="https://docs.iyear.me/tdl/install.sh"
@@ -31,13 +31,67 @@ LAST_MULTI_MBPS=""
 CURRENT_TDL_PID=""
 TDL_INSTALLED_BY_THIS_RUN=0
 TDL_INSTALLED_PATH=""
+NO_COLOR="${NO_COLOR:-0}"
+
+if [ -t 1 ] && [ "$NO_COLOR" != "1" ]; then
+  C_RESET="$(printf '\033[0m')"
+  C_BOLD="$(printf '\033[1m')"
+  C_DIM="$(printf '\033[2m')"
+  C_BLUE="$(printf '\033[34m')"
+  C_CYAN="$(printf '\033[36m')"
+  C_GREEN="$(printf '\033[32m')"
+  C_YELLOW="$(printf '\033[33m')"
+  C_RED="$(printf '\033[31m')"
+else
+  C_RESET=""; C_BOLD=""; C_DIM=""; C_BLUE=""; C_CYAN=""; C_GREEN=""; C_YELLOW=""; C_RED=""
+fi
 
 print_origin() {
   cat <<EOF
-${APP_NAME} ${APP_VERSION}
-出处：${REPO_URL}
-说明：本脚本是 iyear/tdl 的独立交互式封装，不是 Telegram 或 tdl 官方项目。
+${C_BOLD}${C_CYAN}Telegram-Speedtest${C_RESET} ${C_DIM}v${APP_VERSION}${C_RESET}
+${C_DIM}基于 iyear/tdl 的 Telegram 资源测速封装，不是 Telegram 或 tdl 官方项目。${C_RESET}
+${C_DIM}${REPO_URL}${C_RESET}
 EOF
+}
+
+rule() {
+  printf "%s\n" "${C_DIM}────────────────────────────────────────────────────────────${C_RESET}"
+}
+
+clear_screen() {
+  if [ -t 1 ]; then
+    clear
+  fi
+}
+
+section_title() {
+  printf "\n%s%s%s\n" "$C_BOLD" "$1" "$C_RESET"
+  rule
+}
+
+menu_item() {
+  printf "  %s%2s%s  %s\n" "$C_GREEN" "$1" "$C_RESET" "$2"
+}
+
+status_line() {
+  printf "  %s%-10s%s %s\n" "$C_DIM" "$1" "$C_RESET" "$2"
+}
+
+draw_progress() {
+  local label="$1" elapsed="$2" seconds="$3" size="$4" limit_bytes="$5"
+  local width=26
+  local elapsed_pct size_pct pct filled empty bar
+  elapsed_pct=$((elapsed * 100 / seconds))
+  size_pct=$((size * 100 / limit_bytes))
+  pct=$elapsed_pct
+  [ "$size_pct" -gt "$pct" ] && pct="$size_pct"
+  [ "$pct" -gt 100 ] && pct=100
+  filled=$((pct * width / 100))
+  empty=$((width - filled))
+  bar="$(printf "%${filled}s" "" | tr ' ' '#')$(printf "%${empty}s" "" | tr ' ' '-')"
+  printf "\r%s%-8s%s [%s%s%s] %3s%%  %s / %s  %ss/%ss" \
+    "$C_CYAN" "$label" "$C_RESET" "$C_GREEN" "$bar" "$C_RESET" "$pct" \
+    "$(human_size "$size")" "$(human_size "$limit_bytes")" "$elapsed" "$seconds" >&2
 }
 
 pause() {
@@ -98,6 +152,7 @@ dir_size_bytes() {
 }
 
 cleanup() {
+  save_config >/dev/null 2>&1 || true
   if [ -n "${CURRENT_TDL_PID:-}" ] && kill -0 "$CURRENT_TDL_PID" >/dev/null 2>&1; then
     kill "$CURRENT_TDL_PID" >/dev/null 2>&1 || true
     sleep 1
@@ -124,12 +179,14 @@ EOF
   chmod 755 "$tmp"
 
   if [ "$(id -u)" = "0" ]; then
+    mkdir -p "$(dirname "$target")"
     install -m 755 "$tmp" "$target"
     rm -f "$tmp"
     return 0
   fi
 
   if command -v sudo >/dev/null 2>&1; then
+    sudo mkdir -p "$(dirname "$target")"
     sudo install -m 755 "$tmp" "$target"
     rm -f "$tmp"
     return 0
@@ -137,6 +194,64 @@ EOF
 
   rm -f "$tmp"
   return 1
+}
+
+run_as_root() {
+  if [ "$(id -u)" = "0" ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    return 1
+  fi
+}
+
+install_packages_if_possible() {
+  local packages=""
+  if command -v apt-get >/dev/null 2>&1; then
+    packages="curl ca-certificates coreutils gawk sed"
+    run_as_root apt-get update && run_as_root apt-get install -y $packages
+  elif command -v dnf >/dev/null 2>&1; then
+    packages="curl ca-certificates coreutils gawk sed"
+    run_as_root dnf install -y $packages
+  elif command -v yum >/dev/null 2>&1; then
+    packages="curl ca-certificates coreutils gawk sed"
+    run_as_root yum install -y $packages
+  elif command -v zypper >/dev/null 2>&1; then
+    packages="curl ca-certificates coreutils gawk sed"
+    run_as_root zypper --non-interactive install $packages
+  elif command -v pacman >/dev/null 2>&1; then
+    packages="curl ca-certificates coreutils gawk sed"
+    run_as_root pacman -Sy --noconfirm $packages
+  elif command -v apk >/dev/null 2>&1; then
+    packages="curl ca-certificates coreutils gawk sed"
+    run_as_root apk add --no-cache $packages
+  elif command -v pkg >/dev/null 2>&1; then
+    packages="curl ca_root_nss coreutils gawk gsed"
+    run_as_root pkg install -y $packages
+  elif command -v brew >/dev/null 2>&1; then
+    packages="curl coreutils gawk gnu-sed"
+    brew install $packages
+  else
+    return 1
+  fi
+}
+
+ensure_runtime_dependencies() {
+  local missing=""
+  command -v curl >/dev/null 2>&1 || missing="$missing curl"
+  command -v awk >/dev/null 2>&1 || missing="$missing awk"
+  command -v sed >/dev/null 2>&1 || missing="$missing sed"
+  command -v date >/dev/null 2>&1 || missing="$missing coreutils"
+  if [ -z "$missing" ]; then
+    return 0
+  fi
+  printf "%s缺少基础命令：%s%s\n" "$C_YELLOW" "$missing" "$C_RESET"
+  printf "将尝试使用当前系统的软件包管理器安装。\n"
+  install_packages_if_possible $missing || {
+    printf "%s无法自动安装依赖。请手动安装 curl、awk、sed、date/coreutils 后重试。%s\n" "$C_RED" "$C_RESET" >&2
+    return 1
+  }
 }
 
 maybe_install_shortcut() {
@@ -170,17 +285,14 @@ setup_shortcut_only() {
 }
 
 install_tdl_if_needed() {
+  ensure_runtime_dependencies || return 1
+
   if command -v tdl >/dev/null 2>&1; then
     return 0
   fi
 
   printf "未检测到 tdl，将临时安装 iyear/tdl。\n"
   printf "退出脚本时默认会删除本次临时安装的 tdl 主程序。\n\n"
-
-  if ! command -v curl >/dev/null 2>&1; then
-    printf "缺少 curl，Debian/Ubuntu 可先安装：apt update && apt install -y curl\n" >&2
-    return 1
-  fi
 
   if [ "$(id -u)" = "0" ]; then
     curl -fsSL "$TDL_INSTALL_URL" | bash
@@ -223,13 +335,13 @@ run_tdl_login() {
 }
 
 set_video_url() {
-  printf "\n粘贴 Telegram 频道/群组中具体视频消息链接：\n> "
+  printf "\n粘贴 Telegram 频道/群组中具体资源消息链接（建议使用较大的视频或文件）：\n> "
   read -r TG_URL || TG_URL=""
   save_config
 }
 
 set_proxy_menu() {
-  clear
+  clear_screen
   print_origin
   cat <<EOF
 
@@ -262,7 +374,7 @@ EOF
 }
 
 login_menu() {
-  clear
+  clear_screen
   print_origin
   cat <<EOF
 
@@ -288,7 +400,7 @@ EOF
 }
 
 profile_menu() {
-  clear
+  clear_screen
   print_origin
   cat <<EOF
 
@@ -349,13 +461,13 @@ confirm_ready() {
     set_video_url
   fi
   [ -n "$TG_URL" ] || return 1
-  clear
+  clear_screen
   print_origin
   cat <<EOF
 
 即将开始测速
 
-视频链接：$TG_URL
+资源链接：$TG_URL
 连接方式：$(redact_proxy "$PROXY")
 方案：$PROFILE_NAME
 单连接：1线程 / 1连接池 / ${TEST_SECONDS}秒
@@ -402,8 +514,7 @@ run_one_test() {
     size="$(dir_size_bytes "$run_dir")"
     end="$(date +%s)"
     elapsed=$((end - start))
-    printf "\r%-12s 已下载 %s / 上限 %s，已运行 %ss / %ss" \
-      "$label" "$(human_size "$size")" "$(human_size "$limit_bytes")" "$elapsed" "$seconds" >&2
+    draw_progress "$label" "$elapsed" "$seconds" "$size" "$limit_bytes"
     if [ "$size" -ge "$limit_bytes" ] || [ "$elapsed" -ge "$seconds" ]; then
       kill "$CURRENT_TDL_PID" >/dev/null 2>&1 || true
       break
@@ -456,7 +567,7 @@ start_benchmark() {
 }
 
 show_result() {
-  clear
+  clear_screen
   print_origin
   cat <<EOF
 
@@ -497,7 +608,7 @@ EOF
     1)
       {
         print_origin
-        printf "\n视频链接：%s\n连接方式：%s\n方案：%s\n" "$TG_URL" "$(redact_proxy "$PROXY")" "$PROFILE_NAME"
+        printf "\n资源链接：%s\n连接方式：%s\n方案：%s\n" "$TG_URL" "$(redact_proxy "$PROXY")" "$PROFILE_NAME"
         printf "单连接敏感性：%s MiB/s    %s Mbps\n" "${LAST_SINGLE_MIBS:---}" "${LAST_SINGLE_MBPS:---}"
         printf "多连接总吞吐：%s MiB/s    %s Mbps\n" "${LAST_MULTI_MIBS:---}" "${LAST_MULTI_MBPS:---}"
       } > "$RESULT_FILE"
@@ -508,7 +619,7 @@ EOF
 }
 
 status_menu() {
-  clear
+  clear_screen
   print_origin
   local tmp_size session_size config_size tdl_path
   tmp_size="$(dir_size_bytes "$TMP_ROOT")"
@@ -531,7 +642,7 @@ Telegram 登录数据：$SESSION_DIR ($(human_size "$session_size"))
 tdl：${tdl_path:-未安装}
 退出时删除本次临时安装的 tdl：$([ "$KEEP_TDL" = "1" ] && printf "否" || printf "是")
 
-视频链接：${TG_URL:-未设置}
+资源链接：${TG_URL:-未设置}
 连接方式：$(redact_proxy "$PROXY")
 测试方案：$PROFILE_NAME
 EOF
@@ -539,7 +650,7 @@ EOF
 }
 
 clean_menu() {
-  clear
+  clear_screen
   print_origin
   cat <<EOF
 
@@ -569,28 +680,23 @@ EOF
 main_menu() {
   maybe_install_shortcut
   while true; do
-    clear
+    clear_screen
     print_origin
-    cat <<EOF
-
-低 RAM / 低硬盘交互版，基于 iyear/tdl
---------------------------------------------------
-当前链接：${TG_URL:-未设置}
-连接方式：$(redact_proxy "$PROXY")
-测试方案：$PROFILE_NAME
-最后结果：单 ${LAST_SINGLE_MBPS:---} Mbps / 多 ${LAST_MULTI_MBPS:---} Mbps
---------------------------------------------------
-
-1. 一键开始推荐低资源测速
-2. 选择测速强度并开始
-3. 设置/更换频道视频消息链接
-4. 设置直连或代理
-5. Telegram 登录管理
-6. 查看或导出本次结果
-7. 查看 RAM、硬盘和占用状态
-8. 清理与空间设置
-0. 自动清理并退出
-EOF
+    rule
+    status_line "资源" "${TG_URL:-未设置}"
+    status_line "连接" "$(redact_proxy "$PROXY")"
+    status_line "方案" "$PROFILE_NAME"
+    status_line "结果" "单 ${LAST_SINGLE_MBPS:---} Mbps / 多 ${LAST_MULTI_MBPS:---} Mbps"
+    rule
+    menu_item 1 "一键开始推荐低资源测速"
+    menu_item 2 "选择测速强度并开始"
+    menu_item 3 "设置/更换 Telegram 资源消息链接"
+    menu_item 4 "设置直连或代理"
+    menu_item 5 "Telegram 登录管理"
+    menu_item 6 "查看或导出本次结果"
+    menu_item 7 "查看 RAM、硬盘和占用状态"
+    menu_item 8 "清理与空间设置"
+    menu_item 0 "自动清理并退出"
     printf "\n请选择："
     read -r choice || choice=""
     case "$choice" in
