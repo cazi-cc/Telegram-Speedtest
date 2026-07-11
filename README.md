@@ -1,6 +1,6 @@
 # Telegram-Speedtest
 
-一个低资源、交互式的 Telegram 频道视频连接质量测速脚本，适合在 Debian/Ubuntu VPS 上用同一条频道视频消息测试「VPS 到 Telegram 文件服务器」的真实下载表现。
+针对 Telegram 资源的测速脚本，适合在 Debian/Ubuntu VPS 上测试「VPS 到 Telegram 文件服务器」的真实下载表现。
 
 本项目是对 [iyear/tdl](https://github.com/iyear/tdl) 的独立 Bash 封装。脚本不包含、不修改、不重新分发 `tdl` 源码或二进制文件，只在运行时调用 `tdl` 官方安装脚本和命令行接口。
 
@@ -10,25 +10,13 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/cazi-cc/Telegram-Speedtest/main/telegram-speedtest.sh)
 ```
 
-首次运行后，脚本会自动安装联网快捷命令：
-
-```bash
-tst
-```
-
-以后直接运行：
+首次运行后，脚本会自动安装联网快捷命令，以后直接运行：
 
 ```bash
 tst
 ```
 
 `tst` 每次都会从 GitHub 拉取最新版脚本执行，不使用本地缓存脚本。
-
-如果自动安装快捷命令失败，可以手动执行：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/cazi-cc/Telegram-Speedtest/main/telegram-speedtest.sh) setup
-```
 
 ## 功能
 
