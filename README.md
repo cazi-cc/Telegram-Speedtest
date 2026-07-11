@@ -4,6 +4,8 @@
 
 >本项目是对 [iyear/tdl](https://github.com/iyear/tdl) 的独立 Bash 封装。脚本不包含、不修改、不重新分发 `tdl` 源码或二进制文件，只在运行时调用 `tdl` 官方安装脚本和命令行接口。
 
+![image](assets/star.png)
+
 ## 一键运行
 
 ```bash
