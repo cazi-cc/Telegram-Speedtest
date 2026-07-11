@@ -1,10 +1,8 @@
 # Telegram-Speedtest
 
-针对 Telegram 资源的测速脚本，适合在 VPS 上测试「VPS 到 Telegram 文件服务器」的真实下载表现。
+针对 Telegram 资源的测速脚本，适合在 Linux VPS 上测试「VPS 到 Telegram 文件服务器」的真实下载表现。
 
-本项目是对 [iyear/tdl](https://github.com/iyear/tdl) 的独立 Bash 封装。脚本不包含、不修改、不重新分发 `tdl` 源码或二进制文件，只在运行时调用 `tdl` 官方安装脚本和命令行接口。
-
-![Telegram-Speedtest preview](assets/preview.gif)
+>本项目是对 [iyear/tdl](https://github.com/iyear/tdl) 的独立 Bash 封装。脚本不包含、不修改、不重新分发 `tdl` 源码或二进制文件，只在运行时调用 `tdl` 官方安装脚本和命令行接口。
 
 ## 一键运行
 
@@ -19,6 +17,8 @@ tst
 ```
 
 `tst` 每次都会从 GitHub 拉取最新版脚本执行，不使用本地缓存脚本。
+
+![Telegram-Speedtest preview](assets/preview.gif)
 
 ## 功能
 
