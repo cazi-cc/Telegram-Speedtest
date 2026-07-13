@@ -2,7 +2,7 @@
 set -u
 
 APP_NAME="telegram-speedtest"
-APP_VERSION="0.5.0"
+APP_VERSION="0.6.0"
 REPO_URL="https://github.com/cazi-cc/Telegram-Speedtest"
 RAW_URL="https://raw.githubusercontent.com/cazi-cc/Telegram-Speedtest/main/telegram-speedtest.sh"
 TDL_INSTALL_URL="https://docs.iyear.me/tdl/install.sh"
@@ -15,6 +15,7 @@ SESSION_DIR="${HOME}/.tdl/${APP_NAME}"
 TMP_ROOT="${TMPDIR:-/tmp}/${APP_NAME}-${UID:-0}-$$"
 RESULT_FILE="${HOME}/${APP_NAME}-result.txt"
 NAMESPACE="tst"
+LOGIN_TIMEOUT="${TG_LOGIN_TIMEOUT:-180}"
 
 TG_URL=""
 PROXY=""
@@ -237,6 +238,123 @@ install_packages_if_possible() {
   fi
 }
 
+is_systemd_host() {
+  command -v systemctl >/dev/null 2>&1 && command -v timedatectl >/dev/null 2>&1
+}
+
+get_ntp_sync_state() {
+  if ! command -v timedatectl >/dev/null 2>&1; then
+    printf "unknown"
+    return
+  fi
+  local value
+  value="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+  case "$value" in
+    yes|no) printf "%s" "$value" ;;
+    *) printf "unknown" ;;
+  esac
+}
+
+print_time_sync_status() {
+  if ! command -v timedatectl >/dev/null 2>&1; then
+    printf "当前系统没有 timedatectl，无法自动判断 NTP 时间同步状态。\n"
+    return
+  fi
+  local synced service
+  synced="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || printf "unknown")"
+  service="$(timedatectl show -p NTP --value 2>/dev/null || printf "unknown")"
+  printf "NTP 时间同步状态：NTPSynchronized=%s, NTP=%s\n" "${synced:-unknown}" "${service:-unknown}"
+}
+
+repair_time_sync() {
+  if ! is_systemd_host; then
+    cat <<EOF
+当前系统没有检测到 systemd/timedatectl，脚本无法安全判断应使用哪种时间同步服务。
+请手动启用 NTP/chrony/openntpd 后重试登录。
+EOF
+    return 1
+  fi
+
+  printf "将尝试启用系统时间同步。此操作用于修复 Telegram 登录卡在 Sending Code、二维码不返回或手机号登录无响应的问题。\n"
+  printf "执行过程中可能会安装 systemd-timesyncd 或 chrony。\n"
+
+  if command -v apt-get >/dev/null 2>&1; then
+    run_as_root apt-get update || return 1
+    run_as_root apt-get install -y systemd-timesyncd || return 1
+    run_as_root systemctl enable --now systemd-timesyncd || return 1
+  elif command -v dnf >/dev/null 2>&1; then
+    run_as_root dnf install -y chrony || return 1
+    run_as_root systemctl enable --now chronyd || return 1
+  elif command -v yum >/dev/null 2>&1; then
+    run_as_root yum install -y chrony || return 1
+    run_as_root systemctl enable --now chronyd || return 1
+  elif command -v zypper >/dev/null 2>&1; then
+    run_as_root zypper --non-interactive install chrony || return 1
+    run_as_root systemctl enable --now chronyd || return 1
+  elif command -v pacman >/dev/null 2>&1; then
+    run_as_root pacman -Sy --noconfirm systemd || true
+    run_as_root systemctl enable --now systemd-timesyncd || return 1
+  else
+    run_as_root timedatectl set-ntp true || return 1
+  fi
+
+  run_as_root timedatectl set-ntp true >/dev/null 2>&1 || true
+  sleep 2
+  print_time_sync_status
+}
+
+prompt_time_sync_repair() {
+  local reason="$1"
+  printf "\n%sTelegram 登录时间同步检查%s\n" "$C_BOLD" "$C_RESET"
+  rule
+  printf "%s\n" "$reason"
+  cat <<EOF
+这个功能用于排查 tdl 登录 Telegram 时不返回二维码、手机号登录不继续、或卡在 Sending Code 的问题。
+Telegram MTProto 登录依赖较准确的系统时间；如果 VPS 没启用 NTP 或时间偏差较大，认证请求可能被 Telegram 忽略。
+EOF
+  print_time_sync_status
+  printf "\n是否现在尝试启用系统时间同步？不会自动修复，只有选择 y 才会执行。 [y/N]: "
+  local answer
+  read -r answer || answer=""
+  case "$answer" in
+    y|Y|yes|YES)
+      repair_time_sync
+      ;;
+    *)
+      printf "已跳过时间同步修复。你仍可继续重试登录。\n"
+      ;;
+  esac
+}
+
+pre_login_time_check() {
+  local state
+  state="$(get_ntp_sync_state)"
+  if [ "$state" = "no" ]; then
+    prompt_time_sync_repair "检测到系统时间未同步。建议先修复，否则 Telegram 登录可能不返回二维码或卡在 Sending Code。"
+  elif [ "$state" = "unknown" ]; then
+    printf "\n提示：未能确认系统 NTP 时间同步状态。若登录卡住，请优先检查 timedatectl status。\n"
+  fi
+}
+
+run_tdl_login_with_guard() {
+  local mode="$1"
+  local args=()
+  while IFS= read -r -d '' item; do args+=("$item"); done < <(tdl_base_args)
+
+  if command -v timeout >/dev/null 2>&1; then
+    printf "登录保护：如果 %s 秒内没有完成登录流程，脚本会中止并提示检查 NTP 时间同步。\n" "$LOGIN_TIMEOUT"
+    if timeout --help 2>&1 | grep -q -- '--foreground'; then
+      timeout --foreground "$LOGIN_TIMEOUT" tdl "${args[@]}" login -T "$mode"
+    else
+      timeout "$LOGIN_TIMEOUT" tdl "${args[@]}" login -T "$mode"
+    fi
+    return $?
+  fi
+
+  printf "提示：当前系统没有 timeout 命令，无法自动中止卡住的登录流程。\n"
+  tdl "${args[@]}" login -T "$mode"
+}
+
 ensure_runtime_dependencies() {
   local missing=""
   command -v curl >/dev/null 2>&1 || missing="$missing curl"
@@ -326,12 +444,19 @@ run_tdl_login() {
   local mode="$1"
   install_tdl_if_needed || return 1
   ensure_dirs
+  pre_login_time_check
   printf "\n登录方式：%s\n" "$mode"
   printf "登录数据目录：%s\n\n" "$SESSION_DIR"
 
-  local args=()
-  while IFS= read -r -d '' item; do args+=("$item"); done < <(tdl_base_args)
-  tdl "${args[@]}" login -T "$mode"
+  run_tdl_login_with_guard "$mode"
+  local status=$?
+  if [ "$status" = "124" ]; then
+    prompt_time_sync_repair "tdl 登录超过 ${LOGIN_TIMEOUT} 秒未完成，已自动中止。常见原因是 VPS 时间未同步导致 Telegram 认证请求无响应。"
+    return 1
+  elif [ "$status" != "0" ]; then
+    prompt_time_sync_repair "tdl 登录返回失败状态 $status。若你看到二维码/验证码没有返回，优先检查并修复 NTP 时间同步。"
+    return "$status"
+  fi
 }
 
 set_video_url() {
