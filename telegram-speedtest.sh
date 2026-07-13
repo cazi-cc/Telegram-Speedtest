@@ -2,7 +2,7 @@
 set -u
 
 APP_NAME="telegram-speedtest"
-APP_VERSION="0.6.0"
+APP_VERSION="0.7.0"
 REPO_URL="https://github.com/cazi-cc/Telegram-Speedtest"
 RAW_URL="https://raw.githubusercontent.com/cazi-cc/Telegram-Speedtest/main/telegram-speedtest.sh"
 TDL_INSTALL_URL="https://docs.iyear.me/tdl/install.sh"
@@ -15,7 +15,7 @@ SESSION_DIR="${HOME}/.tdl/${APP_NAME}"
 TMP_ROOT="${TMPDIR:-/tmp}/${APP_NAME}-${UID:-0}-$$"
 RESULT_FILE="${HOME}/${APP_NAME}-result.txt"
 NAMESPACE="tst"
-LOGIN_TIMEOUT="${TG_LOGIN_TIMEOUT:-180}"
+LOGIN_PROMPT_TIMEOUT="${TG_LOGIN_PROMPT_TIMEOUT:-10}"
 
 TG_URL=""
 PROXY=""
@@ -24,7 +24,8 @@ TEST_SECONDS=20
 MULTI_THREADS=4
 MULTI_POOL=4
 LIMIT_MIB=128
-KEEP_TDL=0
+KEEP_TDL=1
+KEEP_TDL_USER_SET=0
 LAST_SINGLE_MIBS=""
 LAST_SINGLE_MBPS=""
 LAST_MULTI_MIBS=""
@@ -108,6 +109,10 @@ load_config() {
   [ -f "$CONFIG_FILE" ] || return 0
   # shellcheck disable=SC1090
   . "$CONFIG_FILE"
+  KEEP_TDL_USER_SET="${KEEP_TDL_USER_SET:-0}"
+  if [ "$KEEP_TDL_USER_SET" != "1" ]; then
+    KEEP_TDL=1
+  fi
 }
 
 save_config() {
@@ -122,6 +127,7 @@ MULTI_THREADS='$MULTI_THREADS'
 MULTI_POOL='$MULTI_POOL'
 LIMIT_MIB='$LIMIT_MIB'
 KEEP_TDL='$KEEP_TDL'
+KEEP_TDL_USER_SET='$KEEP_TDL_USER_SET'
 EOF
 }
 
@@ -336,23 +342,91 @@ pre_login_time_check() {
   fi
 }
 
-run_tdl_login_with_guard() {
+login_prompt_detected() {
+  local mode="$1"
+  local log_file="$2"
+  [ -s "$log_file" ] || return 1
+  if [ "$mode" = "code" ]; then
+    grep -Eiq 'Enter your phone number|phone number|\+86|发送验证码|手机号|手機號|電話號碼' "$log_file"
+  else
+    grep -Eiq 'QR|qr|scan|Scan|扫码|掃碼|二维码|二維碼|login token|tg://login|█|▄|▀' "$log_file"
+  fi
+}
+
+run_tdl_login_plain() {
   local mode="$1"
   local args=()
   while IFS= read -r -d '' item; do args+=("$item"); done < <(tdl_base_args)
+  tdl "${args[@]}" login -T "$mode"
+}
 
-  if command -v timeout >/dev/null 2>&1; then
-    printf "登录保护：如果 %s 秒内没有完成登录流程，脚本会中止并提示检查 NTP 时间同步。\n" "$LOGIN_TIMEOUT"
-    if timeout --help 2>&1 | grep -q -- '--foreground'; then
-      timeout --foreground "$LOGIN_TIMEOUT" tdl "${args[@]}" login -T "$mode"
-    else
-      timeout "$LOGIN_TIMEOUT" tdl "${args[@]}" login -T "$mode"
-    fi
+run_tdl_login_via_script() {
+  local mode="$1"
+  local log_file="$2"
+  local cmd_file="$3"
+  local args=()
+  while IFS= read -r -d '' item; do args+=("$item"); done < <(tdl_base_args)
+
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'exec '
+    printf '%q ' tdl "${args[@]}" login -T "$mode"
+    printf '\n'
+  } > "$cmd_file"
+  chmod +x "$cmd_file"
+
+  script -q -f -c "$cmd_file" "$log_file"
+}
+
+run_tdl_login_with_guard() {
+  local mode="$1"
+  local log_file="$TMP_ROOT/login-${mode}.log"
+  local cmd_file="$TMP_ROOT/login-${mode}.sh"
+  local timeout_file="$TMP_ROOT/login-${mode}.timeout"
+  rm -f "$log_file" "$cmd_file" "$timeout_file"
+  mkdir -p "$TMP_ROOT"
+
+  if ! command -v script >/dev/null 2>&1; then
+    printf "提示：当前系统没有 script 命令，无法检测二维码/手机号提示是否返回，将直接运行 tdl 登录。\n"
+    run_tdl_login_plain "$mode"
     return $?
   fi
 
-  printf "提示：当前系统没有 timeout 命令，无法自动中止卡住的登录流程。\n"
-  tdl "${args[@]}" login -T "$mode"
+  printf "登录保护：如果 %s 秒内没有检测到二维码/扫码提示或手机号输入提示，脚本会中止登录并提示检查 NTP 时间同步。\n" "$LOGIN_PROMPT_TIMEOUT"
+
+  run_tdl_login_via_script "$mode" "$log_file" "$cmd_file" &
+  local login_pid=$!
+
+  (
+    local waited=0
+    while kill -0 "$login_pid" >/dev/null 2>&1; do
+      if login_prompt_detected "$mode" "$log_file"; then
+        exit 0
+      fi
+      if [ "$waited" -ge "$LOGIN_PROMPT_TIMEOUT" ]; then
+        printf "prompt-timeout" > "$timeout_file"
+        pkill -TERM -P "$login_pid" >/dev/null 2>&1 || true
+        kill "$login_pid" >/dev/null 2>&1 || true
+        sleep 1
+        pkill -KILL -P "$login_pid" >/dev/null 2>&1 || true
+        kill -9 "$login_pid" >/dev/null 2>&1 || true
+        exit 0
+      fi
+      sleep 1
+      waited=$((waited + 1))
+    done
+  ) &
+  local guard_pid=$!
+
+  wait "$login_pid"
+  local status=$?
+  kill "$guard_pid" >/dev/null 2>&1 || true
+  wait "$guard_pid" >/dev/null 2>&1 || true
+
+  if [ -f "$timeout_file" ]; then
+    return 124
+  fi
+  return "$status"
 }
 
 ensure_runtime_dependencies() {
@@ -451,7 +525,7 @@ run_tdl_login() {
   run_tdl_login_with_guard "$mode"
   local status=$?
   if [ "$status" = "124" ]; then
-    prompt_time_sync_repair "tdl 登录超过 ${LOGIN_TIMEOUT} 秒未完成，已自动中止。常见原因是 VPS 时间未同步导致 Telegram 认证请求无响应。"
+    prompt_time_sync_repair "tdl 登录在 ${LOGIN_PROMPT_TIMEOUT} 秒内没有返回二维码/扫码提示或手机号输入提示，已自动中止。常见原因是 VPS 时间未同步导致 Telegram 认证请求无响应。"
     return 1
   elif [ "$status" != "0" ]; then
     prompt_time_sync_repair "tdl 登录返回失败状态 $status。若你看到二维码/验证码没有返回，优先检查并修复 NTP 时间同步。"
@@ -510,7 +584,8 @@ Telegram 登录管理
 
 1. 二维码登录
 2. 手机号验证码登录
-3. 删除本脚本的 Telegram 登录数据
+3. 检查/修复 NTP 时间同步
+4. 删除本脚本的 Telegram 登录数据
 0. 返回
 EOF
   printf "\n请选择："
@@ -518,7 +593,8 @@ EOF
   case "$choice" in
     1) run_tdl_login "qr"; pause ;;
     2) run_tdl_login "code"; pause ;;
-    3) rm -rf "$SESSION_DIR"; mkdir -p "$SESSION_DIR"; printf "已删除登录数据。\n"; pause ;;
+    3) prompt_time_sync_repair "手动检查 Telegram 登录相关的 NTP 时间同步。用于修复二维码不返回、手机号提示不出现、或卡在 Sending Code 的问题。"; pause ;;
+    4) rm -rf "$SESSION_DIR"; mkdir -p "$SESSION_DIR"; printf "已删除登录数据。\n"; pause ;;
     0) return ;;
     *) printf "无效选择。\n"; pause ;;
   esac
@@ -743,37 +819,6 @@ EOF
   esac
 }
 
-status_menu() {
-  clear_screen
-  print_origin
-  local tmp_size session_size config_size tdl_path
-  tmp_size="$(dir_size_bytes "$TMP_ROOT")"
-  session_size="$(dir_size_bytes "$SESSION_DIR")"
-  config_size="$(dir_size_bytes "$CONFIG_DIR")"
-  tdl_path="$(command -v tdl 2>/dev/null || true)"
-  cat <<EOF
-
-资源与状态
-
-内存：
-$(free -h 2>/dev/null || printf "当前系统没有 free 命令\n")
-
-磁盘：
-$(df -h "$HOME" "${TMPDIR:-/tmp}" 2>/dev/null || true)
-
-脚本临时目录：$TMP_ROOT ($(human_size "$tmp_size"))
-配置目录：$CONFIG_DIR ($(human_size "$config_size"))
-Telegram 登录数据：$SESSION_DIR ($(human_size "$session_size"))
-tdl：${tdl_path:-未安装}
-退出时删除本次临时安装的 tdl：$([ "$KEEP_TDL" = "1" ] && printf "否" || printf "是")
-
-资源链接：${TG_URL:-未设置}
-连接方式：$(redact_proxy "$PROXY")
-测试方案：$PROFILE_NAME
-EOF
-  pause
-}
-
 clean_menu() {
   clear_screen
   print_origin
@@ -784,7 +829,7 @@ clean_menu() {
 1. 立即清理临时视频、残片和日志
 2. 删除已导出的轻量结果文件
 3. 删除本脚本的 Telegram 登录数据
-4. 切换退出时是否保留本次临时安装的 tdl
+4. 切换退出时是否保留本次临时安装的 tdl（当前：$([ "$KEEP_TDL" = "1" ] && printf "保留" || printf "退出删除")）
 0. 返回
 EOF
   printf "\n请选择："
@@ -795,6 +840,7 @@ EOF
     3) rm -rf "$SESSION_DIR"; mkdir -p "$SESSION_DIR"; printf "已删除登录数据。\n"; pause ;;
     4)
       if [ "$KEEP_TDL" = "1" ]; then KEEP_TDL=0; else KEEP_TDL=1; fi
+      KEEP_TDL_USER_SET=1
       save_config
       printf "当前设置：退出时%s删除本次临时安装的 tdl。\n" "$([ "$KEEP_TDL" = "1" ] && printf "不" || printf "会")"
       pause
@@ -819,8 +865,7 @@ main_menu() {
     menu_item 4 "设置直连或代理"
     menu_item 5 "Telegram 登录管理"
     menu_item 6 "查看或导出本次结果"
-    menu_item 7 "查看 RAM、硬盘和占用状态"
-    menu_item 8 "清理与空间设置"
+    menu_item 7 "清理与空间设置"
     menu_item 0 "自动清理并退出"
     printf "\n请选择："
     read -r choice || choice=""
@@ -831,8 +876,7 @@ main_menu() {
       4) set_proxy_menu ;;
       5) login_menu ;;
       6) result_menu ;;
-      7) status_menu ;;
-      8) clean_menu ;;
+      7) clean_menu ;;
       0) save_config; printf "正在清理并退出...\n"; exit 0 ;;
       *) printf "无效选择。\n"; pause ;;
     esac
