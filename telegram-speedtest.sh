@@ -311,15 +311,14 @@ EOF
 
 prompt_time_sync_repair() {
   local reason="$1"
-  printf "\n%sTelegram 登录时间同步检查%s\n" "$C_BOLD" "$C_RESET"
+  printf "\n%s%s警告：Telegram 登录时间同步检查%s\n" "$C_BOLD" "$C_RED" "$C_RESET"
   rule
-  printf "%s\n" "$reason"
-  cat <<EOF
-这个功能用于排查 tdl 登录 Telegram 时不返回二维码、手机号登录不继续、或卡在 Sending Code 的问题。
-Telegram MTProto 登录依赖较准确的系统时间；如果 VPS 没启用 NTP 或时间偏差较大，认证请求可能被 Telegram 忽略。
-EOF
+  printf "%s原因：%s%s\n" "$C_BOLD" "$reason" "$C_RESET"
+  printf "%s重点：%s%s\n" "$C_BOLD" "tdl 登录不返回二维码、手机号输入提示不出现、或卡在 Sending Code 时，常见原因之一是 VPS 时间未同步。" "$C_RESET"
+  printf "%s风险：Telegram MTProto 登录依赖准确系统时间；如果 NTP 未启用或时间偏差较大，认证请求可能被 Telegram 忽略。%s\n" "$C_RED" "$C_RESET"
+  printf "%s说明：下面的修复只会在你输入 y 后执行；默认不会修改系统。%s\n" "$C_YELLOW" "$C_RESET"
   print_time_sync_status
-  printf "\n是否现在尝试启用系统时间同步？不会自动修复，只有选择 y 才会执行。 [y/N]: "
+  printf "\n%s是否现在尝试启用系统时间同步？%s [y/N]: " "$C_BOLD" "$C_RESET"
   local answer
   read -r answer || answer=""
   case "$answer" in
