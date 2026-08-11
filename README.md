@@ -4,13 +4,17 @@
 
 >本项目是对 [iyear/tdl](https://github.com/iyear/tdl) 的独立 Bash 封装。脚本不包含、不修改、不重新分发 `tdl` 源码或二进制文件，只在运行时调用 `tdl` 官方安装脚本和命令行接口。
 
-![image](assets/star.png)
-
 ## 一键运行
-
+**短链接**
+```bash
+bash <(curl -fsSL tg-speed.llv.lv)
+```
+**原链接**
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/cazi-cc/Telegram-Speedtest/main/telegram-speedtest.sh)
 ```
+
+![image](assets/star.png)
 
 首次运行后，脚本会自动安装联网快捷命令，以后直接运行：
 
